@@ -857,12 +857,12 @@ Aturan routing yang dipakai:
 
 | Router | Default Route (ke atas) | Rute ke Bawah (Static Route) | Total Rute Manual |
 |---|---|---|---|
-| **Yui** |  .0.0.0/0 via 192.224.4.109 (Gendou) | 192.224.0.0/23 via 192.224.4.138 (Rei)<br>192.224.4.0/27 via 192.224.4.142 (Shinji)<br>192.224.4.32/28 via 192.224.4.146 (Mari) | 1 default + 3 |
-| **Hikari** |  .0.0.0/0 via 192.224.4.113 (Gendou) | 192.224.3.224/27 via 192.224.4.150 (Kaworu) | 1 default + 1 |
-| **Fuyutsuki** |  .0.0.0/0 via 192.224.4.117 (Gendou) | 192.224.3.192/27 via 192.224.4.154 (Maya)<br>192.224.4.72/29 via 192.224.4.158 (Toji) | 1 default + 2 |
-| **Asuka** |  .0.0.0/0 via 192.224.4.121 (Gendou) | 192.224.3.128/26 via 192.224.4.162 (Kensuke)<br>192.224.4.48/29 via 192.224.4.166 (Ritsuko) | 1 default + 2 |
-| **Shigeru** |  .0.0.0/0 via 192.224.4.133 (Gendou) | 192.224.4.88/29 via 192.224.4.170 (Mokoto) | 1 default + 1 |
-| **Rei, Shinji, Mari, Kaworu, Maya, Toji, Kensuke, Ritsuko, Kaji, Misato, Mokoto** |  .0.0.0/0 via IP router parent di eth0 | *(tidak ada, sudah ujung cabang)* | 1 default |
+| **Yui** | `0.0.0.0/0` via 192.224.4.109 (Gendou) | 192.224.0.0/23 via 192.224.4.138 (Rei)<br>192.224.4.0/27 via 192.224.4.142 (Shinji)<br>192.224.4.32/28 via 192.224.4.146 (Mari) | 1 default + 3 |
+| **Hikari** | `0.0.0.0/0` via 192.224.4.113 (Gendou) | 192.224.3.224/27 via 192.224.4.150 (Kaworu) | 1 default + 1 |
+| **Fuyutsuki** | `0.0.0.0/0` via 192.224.4.117 (Gendou) | 192.224.3.192/27 via 192.224.4.154 (Maya)<br>192.224.4.72/29 via 192.224.4.158 (Toji) | 1 default + 2 |
+| **Asuka** | `0.0.0.0/0` via 192.224.4.121 (Gendou) | 192.224.3.128/26 via 192.224.4.162 (Kensuke)<br>192.224.4.48/29 via 192.224.4.166 (Ritsuko) | 1 default + 2 |
+| **Shigeru** | `0.0.0.0/0` via 192.224.4.133 (Gendou) | 192.224.4.88/29 via 192.224.4.170 (Mokoto) | 1 default + 1 |
+| **Rei, Shinji, Mari, Kaworu, Maya, Toji, Kensuke, Ritsuko, Kaji, Misato, Mokoto** | `0.0.0.0/0` via IP router parent di eth0 | *(tidak ada, sudah ujung cabang)* | 1 default |
 
 ---
 
@@ -2129,12 +2129,12 @@ iface eth0 inet static
 1. Pasang konfigurasi di atas ke **Configure → Edit network configuration** pada seluruh node non-router.
 2. **Stop** lalu **Start** ulang node-node tersebut (minimal wajib restart **Unit-01** untuk membuktikan konfigurasi bertahan setelah restart).
 3. Buka console **Unit-01** (di topologi bernama Unit-01, switch Switch-Cage, gateway Misato 192.224.4.65), lalu jalankan:
-   `ash
+   ```bash
    ip -br a
    ping -c 3 192.224.4.65
-   `
+   ```
    - eth0 pada Unit-01 harus menampilkan 192.224.4.66/29.
-   - ping -c 3 192.224.4.65 (ke gateway Misato) harus berhasil dengan  % packet loss.
+   - ping -c 3 192.224.4.65 (ke gateway Misato) harus berhasil dengan 0% packet loss.
 4. Untuk memastikan bertahan setelah restart, klik **Stop** pada **Unit-01**, **Start** lagi, lalu ulangi ip -br a dan ping -c 3 192.224.4.65.
 
 ### Hasil Pengujian Soal 6
