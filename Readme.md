@@ -2421,3 +2421,457 @@ Setelah menjalankan `bash break_nat.sh` di **Misato** dan **Gendou**, ditemukan 
    ![Perbaikan di Gendou](asset/soal10_gendou_fix.png)
 3. **Unit-01 di Cage** (sebelum perbaikan gagal `100% packet loss` ke `8.8.8.8` tapi bisa ke Lilith `192.224.4.74`, setelah perbaikan kembali berhasil `ping 8.8.8.8` `0% packet loss`):
    ![Unit-01 ping 8.8.8.8](asset/soal10_unit01_ping.png)
+
+
+## Soal 11: Casper Harus Jadi Hantu (Magi-Casper)
+
+> **Soal:**
+> 11. Casper harus jadi hantu: Casper adalah MAGI paling rahasia. Kalau SEELE tahu ia masih hidup, mereka tahu ke mana harus menyerang. Tidak ada perangkat lain yang boleh mem-ping Casper, termasuk yang satu switch. Casper sendiri tetap boleh mem-ping siapa saja. Layanan TCP 5000 Casper tetap hidup. Buktikan ping ke Casper dari Balthasar dan Lilith gagal, sedangkan ping dari Casper ke keduanya berhasil.
+
+### Penjelasan
+
+- Rule dipasang **di Magi-Casper sendiri** (`192.224.4.58`), bukan di router Fuyutsuki. Balthasar dan Melchior berada satu switch (Switch-Terminal) dengan Casper, sehingga ping mereka langsung lewat switch (layer 2) tanpa melewati router.
+- Yang diblok hanya **ICMP echo-request (type 8)** yang masuk melalui chain `INPUT`.
+- Balasan **echo-reply (type 0)** untuk ping yang dikirim Casper tidak diblok, sehingga Casper tetap bisa mem-ping perangkat lain.
+- Rule hanya mencocokkan ICMP, sehingga layanan **TCP 5000** tidak terganggu.
+- `iptables -C ... ||` mencegah rule dobel jika script dijalankan berulang.
+
+### Persiapan
+
+Paket dari Soal 7 dipasang ulang dan listener TCP 5000 dijalankan di background agar console tetap bisa dipakai:
+```bash
+echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
+apt-get update; apt-get install -y netcat-traditional iptables
+(while true; do nc.traditional -l -p 5000 >> /root/casper.log < /dev/null || sleep 1; done) &
+```
+
+### Script `/root/no11.sh` (di Magi-Casper)
+
+```bash
+#!/bin/bash
+# Soal 11 - tidak ada yang boleh ping Casper
+iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null || \
+iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+iptables -S INPUT
+```
+
+### Cara Menjalankan
+
+```bash
+chmod +x /root/no11.sh
+bash /root/no11.sh
+```
+
+### Hasil Pengujian Soal 11
+
+1. **Sebelum rule dipasang**, Lilith masih bisa ping Casper (`0% packet loss`):
+
+   <img width="1143" height="462" alt="image" src="https://github.com/user-attachments/assets/f9996f6e-b983-4b43-9622-811975297e9c" />
+
+
+2. **Script dijalankan di Casper**, rule `-A INPUT -p icmp -m icmp --icmp-type 8 -j DROP` terpasang:
+
+   <img width="1114" height="505" alt="image" src="https://github.com/user-attachments/assets/4e1735b1-90e1-4606-8f97-2dfa53d4a280" />
+   
+3. **Balthasar** (satu switch dengan Casper) gagal ping Casper (`100% packet loss`):
+
+   <img width="1021" height="145" alt="image" src="https://github.com/user-attachments/assets/937c4627-1aa0-4839-878e-e9b914628cf8" />
+
+   
+4. **Lilith** gagal ping Casper (`100% packet loss`), tetapi layanan TCP 5000 tetap hidup (`nc` ke port 5000 `exit=0`):
+
+   <img width="1318" height="226" alt="image" src="https://github.com/user-attachments/assets/759ca10c-4585-4774-a342-745fd4cdb05c" />
+   
+5. **Casper** tetap bisa ping Balthasar (`192.224.4.59`) dan Lilith (`192.224.4.74`) dengan `0% packet loss`. Pesan dari Lilith tercatat di `/root/casper.log`, dan counter rule DROP naik menjadi **6 pkts** (3 dari Lilith + 3 dari Balthasar):
+
+   <img width="1426" height="679" alt="image" src="https://github.com/user-attachments/assets/301bcd86-7c1e-484e-abe5-b1f3dc2cee1b" />
+
+
+## Soal 12: Teknisi yang Kelewat Semangat (`break_fw.sh` di Magi-Casper)
+
+> **Soal:**
+> 12. Teknisi yang kelewat semangat: seorang teknisi menjalankan script hardening di Casper lalu pulang tanpa mengecek. Paginya Casper tidak bisa ping 8.8.8.8 dan tidak bisa apt-get update. Unit-00 juga tidak bisa menyambung ke TCP 5000 Casper. Ping ke Casper tetap ditolak, dan itu memang benar. Jalankan `break_fw.sh` di Magi-Casper, lalu perbaiki tanpa membatalkan tujuan hardening. Casper tetap menolak semua lalu lintas masuk yang tidak diizinkan, dan policy INPUT tetap DROP. Buktikan nc dari Unit-00 ke Casper port 5000 berhasil dan apt-get update di Casper berhasil.
+
+### Langkah Diagnosa
+
+1. Simpan kondisi Casper **sebelum** sabotase sebagai pembanding:
+```bash
+   iptables-save | grep -v "^#" > /root/casper-sebelum.rules
+   cp /etc/resolv.conf /root/resolv.sebelum
+   ip route > /root/route.sebelum
+```
+2. Jalankan `bash /root/break_fw.sh` **tanpa membaca isinya**, lalu reproduksi gejala:
+   - Casper `ping -c 3 8.8.8.8` gagal (`100% packet loss`).
+   - Casper `apt-get update` gagal (`Temporary failure resolving 'deb.debian.org'`).
+   - Unit-00 `time nc -w 3 192.224.4.58 5000` menggantung **3,009 detik** lalu `exit=1`.
+3. Periksa kondisi akhir firewall dengan `iptables -S` dan counter dengan `iptables -L -v -n --line-numbers`:
+```
+   -P INPUT DROP
+   -P FORWARD ACCEPT
+   -P OUTPUT ACCEPT
+   -A INPUT -i lo -j ACCEPT
+   -A INPUT -p icmp -j DROP
+   -A OUTPUT -p udp -m udp --dport 53 -j DROP
+```
+
+### Penyebab yang Ditemukan (4 Penyebab)
+
+1. **`INPUT -p icmp -j DROP` memblok semua jenis ICMP**, termasuk echo-reply (type 0). Ping Casper ke 8.8.8.8 terkirim, tetapi balasannya dibuang (counter icmp DROP = 3 pkts).
+2. **`OUTPUT -p udp --dport 53 -j DROP`** memblok query DNS keluar, sehingga apt gagal resolve `deb.debian.org` (counter udp dpt:53 DROP = 96 pkts).
+3. **Policy INPUT DROP tanpa izin `ESTABLISHED,RELATED`**. Semua balasan koneksi yang dimulai Casper (DNS, HTTP apt, ping) ikut dibuang. Walaupun DNS dibuka, apt tetap akan gagal.
+4. **Tidak ada `ACCEPT` untuk TCP 5000**. Koneksi Unit-00 ke port 5000 terkena policy DROP sehingga menggantung sampai timeout (counter policy DROP = 3 packets, 180 bytes, yaitu 3 paket SYN dari Unit-00).
+
+Selain itu, script meng-flush chain `INPUT` sehingga rule Soal 11 terhapus. Ping ke Casper tetap ditolak hanya karena tertutup rule `-p icmp -j DROP` yang terlalu luas.
+
+### Script Perbaikan `/root/no12.sh` (di Magi-Casper)
+
+```bash
+#!/bin/bash
+# Soal 12 - perbaiki hardening Casper tanpa membatalkan tujuannya
+# Aman dijalankan berulang (chain di-flush dulu, rule tidak dobel)
+
+# 1. buka sementara agar tidak terkunci selama dibersihkan
+iptables -P INPUT ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -F INPUT
+iptables -F OUTPUT
+
+# 2. yang boleh masuk
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+iptables -A INPUT -p tcp --dport 5000 -j ACCEPT
+
+# 3. hardening tetap: sisanya ditolak
+iptables -P INPUT DROP
+
+iptables -S
+```
+
+### Penjelasan Perbaikan
+
+- **Rule DNS di `OUTPUT` dihapus** (`-F OUTPUT`), sehingga Casper bisa mengirim query DNS lagi.
+- **`ESTABLISHED,RELATED` diizinkan**, sehingga balasan dari koneksi yang dimulai Casper (DNS, HTTP apt, echo-reply ping) bisa masuk kembali.
+- **ICMP DROP dipersempit menjadi echo-request (type 8) saja**, sehingga ping ke Casper tetap ditolak (tujuan Soal 11), tetapi balasan ping milik Casper tidak ikut terblok.
+- **TCP 5000 diizinkan**, sehingga layanan Casper bisa diakses Unit-00.
+- **Policy `INPUT` tetap `DROP`**, sehingga lalu lintas masuk lain yang tidak diizinkan tetap ditolak. Tujuan hardening tidak batal.
+
+### Hasil Pengujian Soal 12
+
+1. **Gejala setelah `break_fw.sh`**: Casper gagal ping 8.8.8.8 dan gagal `apt-get update`:
+
+   <img width="1600" height="658" alt="image" src="https://github.com/user-attachments/assets/40adbd70-72d4-4f63-a7f0-f56f93c493d1" />
+
+2. **Gejala di Unit-00**: koneksi ke port 5000 menggantung 3,009 detik lalu `exit=1`:
+
+   <img width="976" height="162" alt="image" src="https://github.com/user-attachments/assets/0664a5d0-ac99-4b37-9d87-518b0943df22" />
+
+3. **Diagnosa** dari `iptables -S` dan counter `iptables -L -v -n`:
+
+   <img width="1501" height="514" alt="image" src="https://github.com/user-attachments/assets/bfdbf318-773a-4080-8128-5ea1deee3128" />
+
+4. **Perbaikan** dengan `no12.sh`, policy `INPUT` tetap `DROP`:
+
+   <img width="913" height="274" alt="image" src="https://github.com/user-attachments/assets/ec78bceb-0bb0-438c-80ec-2ab54409a69f" />
+
+5. **Unit-00** berhasil mengirim pesan ke Casper port 5000 (`exit=0`):
+   
+   <img width="1342" height="265" alt="image" src="https://github.com/user-attachments/assets/835cebc4-8e0b-4210-ba1d-6c265cce15b3" />
+
+6. **Casper** menerima pesan di `/root/casper.log`, `apt-get update` berhasil, `ping 8.8.8.8` berhasil (`0% packet loss`), dan counter menunjukkan ESTABLISHED 27 pkts,
+   icmp type 8 DROP 3 pkts, dpt:5000 ACCEPT 3 pkts:
+   
+   <img width="1600" height="689" alt="image" src="https://github.com/user-attachments/assets/5d300894-b048-4510-bae2-fc98a221c0d6" />
+
+7. **Lilith** tetap gagal ping Casper (`100% packet loss`), sesuai tujuan hardening:
+   <img width="973" height="153" alt="image" src="https://github.com/user-attachments/assets/78a83d03-e842-4f9a-8d67-a60939c18408" />
+
+
+## Soal 13: Brankas Balthasar (Magi-Balthasar)
+
+> **Soal:**
+> 13. Brankas Balthasar: Balthasar menyimpan seluruh data Geofront, tapi terlalu banyak yang bisa mengetuk pintunya, termasuk tetangga satu switch. Hanya Casper dan semua Pilot yang boleh menyambung ke TCP 5000 dan 5001. Node lain, termasuk yang satu switch, harus langsung ditolak di kedua port itu, bukan dibiarkan menggantung sampai timeout. Lalu lintas lain tidak boleh terganggu. Balthasar tetap harus bisa ping 8.8.8.8 dan menerima balasannya. Buktikan nc ke port 5000 dan 5001: Unit-01 berhasil, Lilith dan Melchior ditolak seketika.
+
+### Penjelasan
+
+- Rule dipasang **di Magi-Balthasar sendiri** (`192.224.4.59`), karena Melchior dan Casper berada satu switch (Switch-Terminal) sehingga koneksinya tidak melewati router Fuyutsuki.
+- Dibuat chain khusus **`BRANKAS`** yang hanya dipanggil untuk **TCP port 5000 dan 5001** (`-m multiport`). Lalu lintas lain (ping, DNS, apt) tidak masuk ke chain ini dan policy `INPUT` tetap `ACCEPT`, sehingga tidak terganggu.
+- Sumber yang diizinkan:
+  1. **Magi-Casper**: `192.224.4.58`
+  2. **Pilot di Switch-Cage** (Unit-01, Unit-02, Unit-00): `192.224.4.66–192.224.4.68`
+  3. **Pilot Sachiel** (grup 55 host di Switch-Bunker): `192.224.3.128/26`
+- Selain itu ditolak dengan **`REJECT --reject-with tcp-reset`**. Balthasar langsung membalas TCP RST, sehingga klien langsung mendapat "Connection refused". Jika memakai `DROP`, klien akan menggantung sampai timeout.
+- Chain di-flush setiap script dijalankan, dan jump dari `INPUT` dihapus lalu dipasang ulang, sehingga rule tidak dobel.
+
+### Persiapan
+
+Paket `netcat-traditional` dipasang ulang dan listener port 5000/5001 dinyalakan di background:
+```bash
+echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
+apt-get update; apt-get install -y netcat-traditional
+(while true; do nc.traditional -l -p 5000 >> /root/balthasar_5000.log < /dev/null || sleep 1; done) &
+(while true; do nc.traditional -l -p 5001 >> /root/balthasar_5001.log < /dev/null || sleep 1; done) &
+```
+
+### Script `/root/no13.sh` (di Magi-Balthasar)
+
+```bash
+#!/bin/bash
+# Soal 13 - hanya Casper & Pilot yang boleh ke TCP 5000/5001 Balthasar
+CASPER=192.224.4.58
+PILOT_CAGE=192.224.4.66-192.224.4.68     # Unit-01, Unit-02, Unit-00
+SACHIEL=192.224.3.128/26                 # Sachiel (grup 55 host di Switch-Bunker)
+
+# chain khusus, dikosongkan setiap script dijalankan (tidak dobel)
+iptables -N BRANKAS 2>/dev/null || iptables -F BRANKAS
+iptables -D INPUT -p tcp -m multiport --dports 5000,5001 -j BRANKAS 2>/dev/null
+iptables -I INPUT 1 -p tcp -m multiport --dports 5000,5001 -j BRANKAS
+
+iptables -A BRANKAS -s $CASPER -j ACCEPT
+iptables -A BRANKAS -m iprange --src-range $PILOT_CAGE -j ACCEPT
+iptables -A BRANKAS -s $SACHIEL -j ACCEPT
+iptables -A BRANKAS -p tcp -j REJECT --reject-with tcp-reset
+
+iptables -S
+```
+
+### Cara Menjalankan
+
+```bash
+chmod +x /root/no13.sh
+bash /root/no13.sh
+```
+
+### Hasil Pengujian Soal 13
+
+1. **Script dijalankan di Balthasar**, chain `BRANKAS` terpasang:
+
+   <img width="1197" height="306" alt="image" src="https://github.com/user-attachments/assets/b25e67f6-a4ca-42e4-9daf-7a005a9a4aee" />
+
+2. **Unit-01** (Pilot) berhasil menyambung ke port 5000 dan 5001 (`exit=0`):
+
+   <img width="1189" height="115" alt="image" src="https://github.com/user-attachments/assets/9b665305-9fd1-4574-9da4-45325f70fc73" />
+
+3. **Lilith** ditolak seketika di kedua port (`real 0m0.006s`, `exit=1`):
+   
+   <img width="1084" height="334" alt="image" src="https://github.com/user-attachments/assets/3a1d05c7-6caa-4dc4-a185-b528eea8d399" />
+
+4. **Melchior** (satu switch dengan Balthasar) juga ditolak seketika (`real 0m0.005s`–`0m0.006s`, `exit=1`):
+   
+   <img width="1044" height="324" alt="image" src="https://github.com/user-attachments/assets/f937b1d4-227d-4708-928b-479395909c0a" />
+
+5. **Balthasar** menerima pesan Unit-01 di log, tetap bisa `ping 8.8.8.8` (`0% packet loss`), dan counter `BRANKAS` menunjukkan ACCEPT Pilot = 10 pkts dan REJECT
+   **4pkts** (2 dari Lilith + 2 dari Melchior):
+   
+   <img width="1600" height="569" alt="image" src="https://github.com/user-attachments/assets/290a25c7-5b39-4477-9913-2b6a54eb8f73" />
+
+## Soal 14: Jam Kunjungan Sang Pinguin (Pen-Pen)
+
+> **Soal:**
+> 14. Jam kunjungan sang pinguin: Pen-Pen, pinguin Misato, menyimpan sesuatu yang bikin banyak orang penasaran. Ia hanya boleh dihubungi sesuai jadwal di bawah. Jadwal berlaku untuk ping dan TCP 80 ke Pen-Pen, dari mana pun asalnya. Jam komputer tidak boleh diubah.
+> - Pilot: 08.00 sampai 16.00 WIB, hanya Senin sampai Jumat
+> - Staf Geofront: 17.00 sampai 23.00 WIB, setiap hari
+> - Terduga Dummy System: tidak pernah, selalu ditolak
+> - Lainnya: bebas, tanpa batasan
+>
+> Simpan jadwal sebagai variabel di awal script Pen-Pen, bernama PILOT_START, PILOT_STOP, PILOT_DAYS, STAF_START, dan STAF_STOP. Untuk uji, ubah variabel itu sampai jadwalnya cocok dengan jam sekarang, lalu sampai tidak cocok. Ingat, iptables membaca jam UTC, 7 jam lebih lambat dari WIB. Tunjukkan hasil ping dari Unit-01, Lilith, dan Spy pada kedua kondisi.
+
+### Penjelasan
+
+- Rule dipasang **di Pen-Pen** (`192.224.3.194`) karena jadwal berlaku dari mana pun asalnya.
+- Anggota tiap kelompok:
+  1. **Pilot**: Unit-01, Unit-02, Unit-00 (`192.224.4.66–68`) dan Sachiel (`192.224.3.128/26`)
+  2. **Staf Geofront**: Lilith dan Adam (`192.224.4.74–75`)
+  3. **Terduga Dummy System**: Entry-Plug, Dummy-Plug (`192.224.4.50–51`) dan Spy (`192.224.4.102`)
+- Dibuat chain **`JADWAL_PENPEN`** yang hanya dipanggil untuk **ICMP echo-request** dan **TCP port 80**. Lalu lintas lain tidak terpengaruh.
+- Urutan rule dalam chain:
+  1. Terduga Dummy: selalu `DROP`
+  2. Pilot: `ACCEPT` jika sesuai jam dan hari pilot, selain itu `DROP`
+  3. Staf: `ACCEPT` jika sesuai jam staf, selain itu `DROP`
+  4. Lainnya: `ACCEPT`
+- Jadwal disimpan sebagai variabel **WIB** di awal script. Modul `-m time` pada iptables membaca jam **UTC**, sehingga fungsi `wib2utc` mengurangi 7 jam secara otomatis: Pilot 08:00–16:00 WIB menjadi **01:00–09:00 UTC**, dan Staf 17:00–23:00 WIB menjadi **10:00–16:00 UTC**. Jam sistem tidak diubah.
+
+### Script `/root/no14.sh` (di Pen-Pen)
+
+```bash
+#!/bin/bash
+# ===== JADWAL (WIB) - ubah di sini untuk uji =====
+PILOT_START="08:00"
+PILOT_STOP="16:00"
+PILOT_DAYS="Mon,Tue,Wed,Thu,Fri"
+STAF_START="17:00"
+STAF_STOP="23:00"
+# ================================================
+
+PILOT_CAGE=192.224.4.66-192.224.4.68    # Unit-01, Unit-02, Unit-00
+SACHIEL=192.224.3.128/26                # Sachiel
+STAF=192.224.4.74-192.224.4.75          # Lilith, Adam
+DUMMY_LAB=192.224.4.50-192.224.4.51     # Entry-Plug, Dummy-Plug
+SPY=192.224.4.102                       # Spy
+
+# iptables memakai UTC -> WIB dikurangi 7 jam
+wib2utc() {
+  h=${1%%:*}; m=${1#*:}
+  h=${h#0}; [ -z "$h" ] && h=0
+  printf '%02d:%s' $(( (h + 17) % 24 )) "$m"
+}
+P_START=$(wib2utc $PILOT_START); P_STOP=$(wib2utc $PILOT_STOP)
+S_START=$(wib2utc $STAF_START);  S_STOP=$(wib2utc $STAF_STOP)
+echo "Jam node sekarang: $(TZ=WIB-7 date '+%a %H:%M WIB') = $(date -u '+%H:%M UTC')"
+echo "Pilot WIB $PILOT_START-$PILOT_STOP = UTC $P_START-$P_STOP ($PILOT_DAYS)"
+echo "Staf  WIB $STAF_START-$STAF_STOP = UTC $S_START-$S_STOP (setiap hari)"
+
+# chain jadwal, dikosongkan setiap script dijalankan (tidak dobel)
+iptables -N JADWAL_PENPEN 2>/dev/null || iptables -F JADWAL_PENPEN
+iptables -D INPUT -p icmp --icmp-type echo-request -j JADWAL_PENPEN 2>/dev/null
+iptables -D INPUT -p tcp --dport 80 -j JADWAL_PENPEN 2>/dev/null
+iptables -I INPUT 1 -p icmp --icmp-type echo-request -j JADWAL_PENPEN
+iptables -I INPUT 1 -p tcp --dport 80 -j JADWAL_PENPEN
+
+# 1. Terduga Dummy System: selalu ditolak
+iptables -A JADWAL_PENPEN -m iprange --src-range $DUMMY_LAB -j DROP
+iptables -A JADWAL_PENPEN -s $SPY -j DROP
+# 2. Pilot: hanya di jam & hari pilot
+iptables -A JADWAL_PENPEN -m iprange --src-range $PILOT_CAGE \
+  -m time --timestart $P_START --timestop $P_STOP --weekdays $PILOT_DAYS -j ACCEPT
+iptables -A JADWAL_PENPEN -s $SACHIEL \
+  -m time --timestart $P_START --timestop $P_STOP --weekdays $PILOT_DAYS -j ACCEPT
+iptables -A JADWAL_PENPEN -m iprange --src-range $PILOT_CAGE -j DROP
+iptables -A JADWAL_PENPEN -s $SACHIEL -j DROP
+# 3. Staf Geofront: setiap hari di jam staf
+iptables -A JADWAL_PENPEN -m iprange --src-range $STAF \
+  -m time --timestart $S_START --timestop $S_STOP -j ACCEPT
+iptables -A JADWAL_PENPEN -m iprange --src-range $STAF -j DROP
+# 4. Lainnya: bebas
+iptables -A JADWAL_PENPEN -j ACCEPT
+
+iptables -L JADWAL_PENPEN -n --line-numbers
+```
+
+### Cara Uji
+
+Jam node mengikuti jam server GNS3. Saat pengujian, `TZ=WIB-7 date` menunjukkan **Selasa 16:47 WIB = 09:47 UTC**. Variabel jadwal diubah dengan `sed`, lalu script dijalankan ulang:
+
+1. **Kondisi A (jadwal cocok)**: PILOT dan STAF diubah menjadi 16:00–18:00 WIB (09:00–11:00 UTC), mencakup jam node.
+```bash
+   sed -i 's/^PILOT_START=.*/PILOT_START="16:00"/' /root/no14.sh
+   sed -i 's/^PILOT_STOP=.*/PILOT_STOP="18:00"/'   /root/no14.sh
+   sed -i 's/^STAF_START=.*/STAF_START="16:00"/'   /root/no14.sh
+   sed -i 's/^STAF_STOP=.*/STAF_STOP="18:00"/'     /root/no14.sh
+   bash /root/no14.sh
+```
+2. **Kondisi B (jadwal tidak cocok)**: PILOT diubah menjadi 08:00–09:00 WIB (01:00–02:00 UTC), STAF menjadi 20:00–21:00 WIB (13:00–14:00 UTC).
+```bash
+   sed -i 's/^PILOT_START=.*/PILOT_START="08:00"/' /root/no14.sh
+   sed -i 's/^PILOT_STOP=.*/PILOT_STOP="09:00"/'   /root/no14.sh
+   sed -i 's/^STAF_START=.*/STAF_START="20:00"/'   /root/no14.sh
+   sed -i 's/^STAF_STOP=.*/STAF_STOP="21:00"/'     /root/no14.sh
+   bash /root/no14.sh
+```
+3. Setelah pengujian, variabel **dikembalikan ke jadwal asli** (08:00–16:00 dan 17:00–23:00) lalu script dijalankan ulang.
+
+### Hasil Pengujian Soal 14
+
+**Kondisi A: jadwal cocok dengan jam node**
+
+1. **Script kondisi A**: jadwal Pilot dan Staf diubah menjadi 16:00–18:00 WIB (09:00–11:00 UTC). Jam node saat itu Selasa 16:47 WIB = 09:47 UTC, sehingga masuk ke jendela jadwal:
+   <img width="1600" height="713" alt="image" src="https://github.com/user-attachments/assets/2b7a3eaf-5c2a-430d-8ba6-35db7554befa" />
+
+2. **Unit-01 (Pilot)** berhasil ping Pen-Pen (`0% packet loss`), karena jam dan hari sesuai jadwal Pilot:
+   <img width="910" height="243" alt="image" src="https://github.com/user-attachments/assets/7efa6d7c-630d-406a-ba11-4187511530d9" />
+
+3. **Lilith (Staf Geofront)** berhasil ping Pen-Pen (`0% packet loss`), karena jam sesuai jadwal Staf:
+   <img width="870" height="250" alt="image" src="https://github.com/user-attachments/assets/09a4ce6a-c2b3-455e-a771-a615a6dfe42e" />
+
+4. **Spy (Terduga Dummy System)** gagal ping Pen-Pen (`100% packet loss`), karena Dummy System selalu ditolak:
+   <img width="862" height="163" alt="image" src="https://github.com/user-attachments/assets/293a7404-ae71-42a3-923d-bba3b563b53c" />
+
+
+**Kondisi B: jadwal tidak cocok dengan jam node**
+
+5. **Script kondisi B**: jadwal Pilot diubah menjadi 08:00–09:00 WIB (01:00–02:00 UTC) dan Staf menjadi 20:00–21:00 WIB (13:00–14:00 UTC). Jam node saat itu Selasa 16:49 WIB = 09:49 UTC, sehingga berada di luar kedua jendela jadwal:
+  <img width="1600" height="707" alt="image" src="https://github.com/user-attachments/assets/e8424eca-bbdf-44b1-ac26-2c64f080488d" />
+
+6. **Unit-01 (Pilot)** gagal ping Pen-Pen (`100% packet loss`), karena di luar jam Pilot:
+   <img width="934" height="141" alt="image" src="https://github.com/user-attachments/assets/851e92f1-1bb7-4417-94f1-db1c4e753ab4" />
+
+7. **Lilith (Staf Geofront)** gagal ping Pen-Pen (`100% packet loss`), karena di luar jam Staf:
+   <img width="898" height="145" alt="image" src="https://github.com/user-attachments/assets/f7c19587-1661-4f65-807a-7756500ee168" />
+
+8. **Spy (Terduga Dummy System)** tetap gagal ping Pen-Pen (`100% packet loss`):
+   <img width="895" height="150" alt="image" src="https://github.com/user-attachments/assets/acc3e541-455b-47bf-88db-7aedd20f477d" />
+
+
+**Ringkasan:** pada kondisi A, Unit-01 dan Lilith berhasil sedangkan Spy gagal. Pada kondisi B, ketiganya gagal. Setelah pengujian, variabel jadwal dikembalikan ke nilai asli (Pilot 08:00–16:00 WIB, Staf 17:00–23:00 WIB).
+
+
+ ## Soal 15: Banjir Ping di Pusat Komando (Tokyo3-Core)
+
+> **Soal:**
+> 15. Banjir ping di pusat komando: Instrumentality makin dekat, dan semua orang berebut mem-ping Tokyo3-Core. Banjir ping bisa melumpuhkannya. Batasi Tokyo3-Core agar hanya menjawab maksimal 5 ping per detik, dan buang kelebihannya. Aturan ini tidak boleh mengganggu ping di bawah batas. Aturan ini juga tidak boleh membatasi ping yang dikirim Tokyo3-Core sendiri. Pastikan rule benar-benar mengenai paket yang dituju. Periksa urutan rule dan jenis paketnya. Buktikan ping rapat dari Lilith, misalnya `ping -i 0.1 -c50`, sebagian hilang, dan tunjukkan counter rule pembuangan naik. Buktikan ping biasa semuanya berhasil, dengan jeda minimal 3 detik di antaranya.
+
+### Penjelasan
+
+- **Jenis paket**: yang dibatasi hanya `-p icmp --icmp-type echo-request` (type 8). Jika hanya memakai `-p icmp`, balasan **echo-reply** untuk ping milik Tokyo3-Core ikut dibatasi.
+- **Chain**: rule dipasang di **`INPUT`**. Jika dipasang di `OUTPUT`, ping keluar milik Tokyo3-Core yang terbatasi.
+- **Urutan**: jump ke chain dipasang paling atas (`-I INPUT 1`). Jika ada rule `ACCEPT` umum di atasnya, rule limit tidak pernah terkena.
+- **Pembatas**: dibuat chain **`BATAS_PING`**. Rule pertama `-m limit --limit 5/second --limit-burst 5 -j ACCEPT` menerima paket selama masih dalam batas, rule kedua `-j DROP` membuang kelebihannya.
+- Chain di-flush setiap script dijalankan, sehingga rule tidak dobel.
+
+### Persiapan
+
+Listener Soal 8 di Tokyo3-Core dijalankan di background agar console tidak terkunci:
+```bash
+nohup bash /root/no8.sh > /root/no8.log 2>&1 &
+```
+
+### Script `/root/no15.sh` (di Tokyo3-Core)
+
+```bash
+#!/bin/bash
+# Soal 15 - Tokyo3-Core menjawab maksimal 5 ping per detik
+# Hanya echo-request MASUK (INPUT) yang dibatasi:
+#  - echo-reply untuk ping milik Tokyo3-Core tidak kena
+#  - ping keluar (OUTPUT) tidak kena
+
+iptables -N BATAS_PING 2>/dev/null || iptables -F BATAS_PING
+iptables -D INPUT -p icmp --icmp-type echo-request -j BATAS_PING 2>/dev/null
+iptables -I INPUT 1 -p icmp --icmp-type echo-request -j BATAS_PING
+
+iptables -A BATAS_PING -m limit --limit 5/second --limit-burst 5 -j ACCEPT
+iptables -A BATAS_PING -j DROP
+
+iptables -S
+```
+
+### Cara Menjalankan
+
+```bash
+chmod +x /root/no15.sh
+bash /root/no15.sh
+```
+
+### Hasil Pengujian Soal 15
+
+1. **Script dijalankan di Tokyo3-Core**, chain `BATAS_PING` terpasang di posisi paling atas `INPUT`:
+   <img width="690" height="243" alt="image" src="https://github.com/user-attachments/assets/f3a4e885-a5fe-48b0-aa80-7922d8762eae" />
+
+2. **Ping rapat dari Lilith** (`ping -i 0.1 -c 50 192.224.4.106`): 50 paket dikirim, 30 diterima, **40% packet loss**:
+   <img width="1065" height="723" alt="image" src="https://github.com/user-attachments/assets/83c2405d-828f-439e-a073-2d69cc04203a" />
+
+3. **Counter `BATAS_PING`** di Tokyo3-Core naik: ACCEPT = 30 pkts, **DROP = 20 pkts**:
+   <img width="1573" height="174" alt="image" src="https://github.com/user-attachments/assets/4f0110a4-52c0-4f32-ae22-0455cafbca44" />
+
+4. **Ping biasa dari Lilith** dengan jeda 3 detik (`sleep 3; ping -c 5 192.224.4.106`, dua kali) semuanya berhasil (`0% packet loss`):
+   <img width="1033" height="606" alt="image" src="https://github.com/user-attachments/assets/cfebdf7a-928e-40d7-9c9a-cffc4f415d45" />
+
+5. **Ping milik Tokyo3-Core sendiri** (`ping -i 0.1 -c 30 192.224.4.105`) tidak dibatasi (`0% packet loss`), dan counter `BATAS_PING` tetap 0:
+   <img width="1552" height="403" alt="image" src="https://github.com/user-attachments/assets/4086dc8d-b0c0-4e36-b4d6-c24d0ed96291" />
+
+
+### Analisis
+
+- Ping rapat mengirim 10 paket per detik selama 5 detik (50 paket). Yang diizinkan adalah 5 paket cadangan awal + 5 paket/detik × 5 detik ≈ **30 paket**, sehingga **20 paket** dibuang.
+- Ping biasa (1 paket per detik) berada di bawah batas, sehingga tidak terganggu.
+- Ping yang dikirim Tokyo3-Core tidak terkena rule, karena balasan yang diterimanya berupa echo-reply (type 0), bukan echo-request.
