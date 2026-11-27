@@ -2921,17 +2921,24 @@ bash /root/no16.sh
 ### Hasil Pengujian Soal 16
 
 1. **Script dijalankan di Tokyo3-Core**, rule `LOG` dengan prefix `SCAN-NERV:` dan rule `REJECT` terpasang (rule Soal 15 tetap ada):
-   ![Script soal 16 di Tokyo3-Core](asset/soal16_script_tokyo3.png)
+   <img width="1600" height="214" alt="image" src="https://github.com/user-attachments/assets/1740eaf7-0e88-4353-a3c0-37dd459eb2bc" />
+
 2. **Dummy-Plug** ke port 22, 23, dan 3306 langsung ditolak (`real 0m0.003s`–`0m0.007s`, `exit=1`):
-   ![Scan Dummy-Plug ditolak](asset/soal16_dummy_ditolak.png)
+   <img width="1311" height="498" alt="image" src="https://github.com/user-attachments/assets/63ddc23a-06e1-4332-aef2-2bf3c4dc3888" />
+
 3. **Dummy-Plug** ke port 80 mendapat `Welcome to Tokyo3-Core`, dan ke port 8080 mendapat `syifa imutz` (`exit=0`):
-   ![Dummy-Plug port 80 dan 8080](asset/soal16_dummy_80_8080.png)
+   <img width="1501" height="250" alt="image" src="https://github.com/user-attachments/assets/c12b3fc2-83f9-45a9-8932-9ea721cc67d2" />
+
 4. **Counter `SCAN_NERV`** di Tokyo3-Core: LOG = **3 pkts** dan REJECT = **3 pkts** (180 bytes). Log kernel tidak terlihat di container, sehingga counter dipakai sebagai bukti:
-   ![Counter SCAN_NERV](asset/soal16_counter.png)
+   <img width="1600" height="148" alt="image" src="https://github.com/user-attachments/assets/ce371bd2-f72b-4600-84f5-e5fc53cf6384" />
+
+
 5. **Lilith** (klien lain) tetap bisa ke port 80. Percobaan ke port 22 gagal karena memang tidak ada layanan:
-   ![Lilith nc ke Tokyo3-Core](asset/soal16_lilith_nc.png)
+   <img width="906" height="64" alt="image" src="https://github.com/user-attachments/assets/c2a00ec9-c73d-4b16-8a34-50315c6bcd81" />
+
 6. **Counter `SCAN_NERV` tetap 3** setelah percobaan Lilith, membuktikan klien lain tidak terkena rule:
-   ![Counter tetap](asset/soal16_counter_tetap.png)
+   <img width="1568" height="146" alt="image" src="https://github.com/user-attachments/assets/1c162def-03d2-47ba-bd86-8fb6eeb69da7" />
+
 
 ## Soal 17: Sihir Hitam di Jalur Paket (Fuyutsuki)
 
@@ -2990,19 +2997,27 @@ iptables -t nat -S PREROUTING
 ### Hasil Pengujian Soal 17
 
 1. **Sebelum rule dipasang**, pesan Casper ke `192.224.4.82:9000` masih diterima di **Zeruel**:
-   ![Zeruel menerima pesan sebelum rule](asset/soal17_zeruel_sebelum.png)
+   <img width="711" height="219" alt="image" src="https://github.com/user-attachments/assets/66824ce2-1303-4a5d-b92f-be932301640a" />
+
 2. **Script dijalankan di Fuyutsuki**, rule `DNAT --to-destination 192.224.3.194` terpasang:
-   ![Script soal 17 di Fuyutsuki](asset/soal17_script_fuyutsuki.png)
+   <img width="1299" height="142" alt="image" src="https://github.com/user-attachments/assets/4c57a561-a6a1-4a75-8cdc-58b47808914b" />
+
+
 3. **Casper** menampilkan `Connection to 192.224.4.82 9000 port [tcp/*] succeeded!`, sehingga Casper mengira tersambung ke Zeruel:
-   ![Casper tersambung ke 192.224.4.82](asset/soal17_casper_succeeded.png)
+   <img width="976" height="210" alt="image" src="https://github.com/user-attachments/assets/e09e062f-188a-4d81-8e47-21ca3e2fad28" />
+
 4. **Pen-Pen** menerima pesan `Halo Zeruel, ini Casper soal 17`:
-   ![Pen-Pen menerima pesan](asset/soal17_penpen_menerima.png)
+   <img width="450" height="94" alt="image" src="https://github.com/user-attachments/assets/60d599b1-86fd-4c2a-bd77-35904b847975" />
+
 5. **Zeruel** tidak menerima apa pun (layar listener tetap kosong):
-   ![Zeruel kosong](asset/soal17_zeruel_kosong.png)
+   <img width="1194" height="531" alt="image" src="https://github.com/user-attachments/assets/9a53065d-05cb-4f99-93c9-0e07af873a35" />
+
 6. **Tabel conntrack di Fuyutsuki**: `ESTABLISHED src=192.224.4.58 dst=192.224.4.82 sport=40872 dport=9000 src=192.224.3.194 dst=192.224.4.58 sport=9000 dport=40872 [ASSURED]`, dengan counter DNAT 4 pkts:
-   ![Conntrack di Fuyutsuki](asset/soal17_conntrack.png)
+   <img width="1600" height="200" alt="image" src="https://github.com/user-attachments/assets/e8a7af6c-7214-4e63-abd4-ed77f234d798" />
+
 7. **Ping tidak dialihkan**: Casper `ping -c 3 192.224.4.82` berhasil (`0% packet loss`) dan dijawab Zeruel sendiri:
-   ![Casper ping Zeruel](asset/soal17_ping_casper_zeruel.png)
+   <img width="918" height="307" alt="image" src="https://github.com/user-attachments/assets/974896cb-5c30-45ec-a9cd-f0419a96e72e" />
+
 
 ### Membaca Tabel Conntrack
 
@@ -3058,15 +3073,20 @@ bash /root/no18.sh
 ### Hasil Pengujian Soal 18
 
 1. **Script dijalankan di Shigeru**, chain `ZONA_SENSITIF` terpasang pada `FORWARD -i eth0`:
-   ![Script soal 18 di Shigeru](asset/soal18_script_shigeru.png)
+   <img width="996" height="279" alt="image" src="https://github.com/user-attachments/assets/7ba1ba74-9d1e-4493-9f14-a4494e6973fc" />
+
 2. **Casper** (subnet Terminal) berhasil ping Zeruel (`0% packet loss`):
-   ![Casper ping Zeruel berhasil](asset/soal18_casper_berhasil.png)
+   <img width="889" height="261" alt="image" src="https://github.com/user-attachments/assets/640045c0-e5b6-42da-b760-b92f988c384d" />
+
 3. **Lilith** (luar zona) gagal ping Zeruel `192.224.4.82` dan Radar-Array `192.224.4.90` (`100% packet loss`):
-   ![Lilith ping zona sensitif gagal](asset/soal18_lilith_gagal.png)
+   <img width="897" height="337" alt="image" src="https://github.com/user-attachments/assets/31edb918-fc2f-4633-9025-1f63348bf7d7" />
+
 4. **Zeruel** (dalam zona) tetap bisa ping `8.8.8.8` dan Lilith `192.224.4.74` (`0% packet loss`), karena balasannya diizinkan oleh rule `ESTABLISHED`:
-   ![Zeruel ping keluar zona](asset/soal18_zeruel_keluar.png)
+   <img width="883" height="481" alt="image" src="https://github.com/user-attachments/assets/6b207a8b-143c-49d7-9de7-9d8d949a5c7e" />
+
 5. **Counter `ZONA_SENSITIF`**: ESTABLISHED = 8 pkts, ICMP Terminal = 1 pkt, DROP = 6 pkts:
-   ![Counter ZONA_SENSITIF](asset/soal18_counter.png)
+   <img width="1600" height="176" alt="image" src="https://github.com/user-attachments/assets/26012400-929e-4a1e-9fbd-c057d0ad8715" />
+
 
 ### Analisis Counter
 
@@ -3141,16 +3161,22 @@ iptables -S
 ### Hasil Pengujian Soal 19
 
 1. **Script dijalankan di Shigeru**, chain `ISOLASI_ARMISAEL` terpasang paling atas di `INPUT`, `FORWARD`, dan `OUTPUT` (rule Soal 18 tetap ada):
-   ![Script soal 19 di Shigeru](asset/soal19_script_shigeru.png)
+   <img width="1152" height="438" alt="image" src="https://github.com/user-attachments/assets/9ac01e2f-cc6b-4c46-be86-f2f1586e092a" />
+
 2. **Script dijalankan di Zeruel**, rule `DROP` untuk `192.224.4.83` terpasang di `INPUT` dan `OUTPUT`:
-   ![Script soal 19 di Zeruel](asset/soal19_script_zeruel.png)
+   <img width="585" height="210" alt="image" src="https://github.com/user-attachments/assets/81adad6b-4472-4630-8cbd-8ce923f78639" />
+
 3. **Armisael** gagal ping ke Seele `8.8.8.8`, Zeruel `192.224.4.82`, Lilith `192.224.4.74`, dan gateway `192.224.4.81` (`100% packet loss`). Semua `nc` gagal (`exit=1`): TCP 53 ke Seele `timed out`, dan TCP 9000 ke Zeruel dan Lilith tidak menghasilkan pesan apa pun:
-   ![Armisael terisolasi](asset/soal19_armisael_gagal.png)
+   <img width="1057" height="756" alt="image" src="https://github.com/user-attachments/assets/34abaa86-4990-48ad-8af1-787b4877788d" />
+
 4. **Zeruel** berhasil ping `8.8.8.8` dan Lilith (`0% packet loss`), dan `nc` ke Seele TCP 53 `succeeded!` (`exit=0`):
-   ![Zeruel ke Seele berhasil](asset/soal19_zeruel_seele.png)
+   <img width="838" height="505" alt="image" src="https://github.com/user-attachments/assets/fdbe99ae-a8d4-467f-aff0-e35f83037ba8" />
+
 5. **Zeruel** berhasil mengirim pesan ke Lilith TCP 9000 (`exit=0`), dan pesan `Halo Lilith dari Zeruel soal 19` muncul di Lilith:
-   ![Zeruel ke Lilith berhasil](asset/soal19_zeruel_lilith.png)
-6. **Counter isolasi**: Shigeru `ISOLASI_ARMISAEL` DROP `-s 192.224.4.83` = **12 pkts**, dan Zeruel `INPUT` DROP `-s 192.224.4.83` = **5 pkts**:
-   ![Counter isolasi](asset/soal19_counter.png)
-7. **Arah masuk juga terblok**: Lilith gagal ping Armisael (`100% packet loss`):
-   ![Lilith ping Armisael gagal](asset/soal19_lilith_ke_armisael.png)
+   <img width="352" height="60" alt="image" src="https://github.com/user-attachments/assets/f44fa610-cbd9-4b03-8730-e440167bec8b" />
+
+   <img width="919" height="246" alt="image" src="https://github.com/user-attachments/assets/c57f394b-333b-4bc8-bb98-342b0088a109" />
+
+7. **Counter isolasi**: Shigeru `ISOLASI_ARMISAEL` DROP `-s 192.224.4.83` = **12 pkts**, dan Zeruel `INPUT` DROP `-s 192.224.4.83` = **5 pkts**:
+   <img width="1168" height="151" alt="image" src="https://github.com/user-attachments/assets/0f130374-f9b0-4a9c-8491-b42ccaf3842f" />
+
