@@ -3180,3 +3180,148 @@ iptables -S
 7. **Counter isolasi**: Shigeru `ISOLASI_ARMISAEL` DROP `-s 192.224.4.83` = **12 pkts**, dan Zeruel `INPUT` DROP `-s 192.224.4.83` = **5 pkts**:
    <img width="1168" height="151" alt="image" src="https://github.com/user-attachments/assets/0f130374-f9b0-4a9c-8491-b42ccaf3842f" />
 
+
+## Soal 20: Uji Kebakaran Geofront (Shigeru, Fuyutsuki, Tokyo3-Core)
+
+> **Soal:**
+> 20. Uji kebakaran Geofront: NERV harus bisa dibangun ulang dengan cepat. Pilih tiga node sendiri, minimal satu router. Di tiap node, simpan dulu rule dengan iptables-save ke `/root/<nama>.rules`. Lalu hapus semua rule iptables termasuk tabel nat, dan hapus rute yang kamu tambahkan sendiri. Pulihkan rule dengan iptables-restore, dan pulihkan rute dengan `/root/<nama>.sh`. Lakukan pemulihan itu dua kali berturut-turut. Hasilnya harus sama: rule dan rute tidak dobel, dan node berfungsi seperti semula. Buktikan jumlah baris `iptables -S` dan `iptables -t nat -S` sama setelah pemulihan pertama dan kedua. Buktikan juga node itu berfungsi lagi.
+
+### Node yang Dipilih
+
+1. **Shigeru (router)**: rule filter Soal 18 (`ZONA_SENSITIF`) dan Soal 19 (`ISOLASI_ARMISAEL`). Rute buatan sendiri: default via Gendou dan `192.224.4.88/29` via Mokoto.
+2. **Fuyutsuki (router)**: rule **NAT** Soal 17 (DNAT Casper→Zeruel ke Pen-Pen). Rute buatan sendiri: default via Gendou, Switch-Medic via Maya, dan Switch-Dogma via Toji.
+3. **Tokyo3-Core (server)**: rule filter Soal 15 (`BATAS_PING`) dan Soal 16 (`SCAN_NERV`). Rute buatan sendiri: default via Gendou.
+
+### Penjelasan
+
+- `iptables-restore` (tanpa opsi `-n`) **mengosongkan setiap tabel** yang ada di file sebelum mengisinya kembali, sehingga dijalankan berapa kali pun hasilnya sama.
+- Rute dipulihkan dengan `ip route replace`: rute yang sudah ada ditimpa, yang belum ada ditambahkan, sehingga tidak dobel dan tidak muncul error "File exists".
+- Script `no20.sh` menghitung jumlah baris `iptables -S`, `iptables -t nat -S`, dan `ip route` pada setiap tahap sebagai bukti.
+- Nama `/root/<nama>.sh` dan `/root/<nama>.rules` mengikuti nama node, sesuai ketentuan soal.
+
+### Script Rute `/root/<nama>.sh`
+
+1. **`/root/shigeru.sh`**
+```bash
+   #!/bin/bash
+   # Soal 20 - pulihkan rute statis Shigeru (aman diulang)
+   ip route replace default via 192.224.4.133 dev eth0          # ke Gendou
+   ip route replace 192.224.4.88/29 via 192.224.4.170 dev eth2  # Switch-Radar via Mokoto
+```
+2. **`/root/fuyutsuki.sh`**
+```bash
+   #!/bin/bash
+   # Soal 20 - pulihkan rute statis Fuyutsuki (aman diulang)
+   ip route replace default via 192.224.4.117 dev eth0           # ke Gendou
+   ip route replace 192.224.3.192/27 via 192.224.4.154 dev eth2  # Switch-Medic via Maya
+   ip route replace 192.224.4.72/29 via 192.224.4.158 dev eth3   # Switch-Dogma via Toji
+```
+3. **`/root/tokyo3-core.sh`**
+```bash
+   #!/bin/bash
+   # Soal 20 - pulihkan rute Tokyo3-Core (aman diulang)
+   ip route replace default via 192.224.4.105 dev eth0           # ke Gendou
+```
+
+### Script Uji `/root/no20.sh` (sama di ketiga node)
+
+```bash
+#!/bin/bash
+# Soal 20 - simpan, hancurkan, pulihkan 2x. Pakai: bash /root/no20.sh <nama>
+NAMA=$1
+[ -f /root/$NAMA.sh ] || { echo "Tidak ada /root/$NAMA.sh"; exit 1; }
+
+cek() {
+  echo "[$1] iptables -S = $(iptables -S | wc -l) baris | iptables -t nat -S = $(iptables -t nat -S | wc -l) baris | ip route = $(ip route | wc -l) baris"
+}
+
+echo "===== 1. SIMPAN rule ke /root/$NAMA.rules ====="
+iptables-save > /root/$NAMA.rules
+cek AWAL
+
+echo "===== 2. HAPUS semua rule (termasuk nat) dan rute buatan sendiri ====="
+iptables -P INPUT ACCEPT; iptables -P FORWARD ACCEPT; iptables -P OUTPUT ACCEPT
+for t in filter nat mangle raw; do iptables -t $t -F; iptables -t $t -X; done
+grep "^ip route replace" /root/$NAMA.sh | awk '{print $4}' | while read r; do ip route del $r; done
+cek DIHAPUS
+iptables -S; iptables -t nat -S; ip route
+
+echo "===== 3. PEMULIHAN PERTAMA ====="
+iptables-restore < /root/$NAMA.rules
+bash /root/$NAMA.sh
+cek PULIH-1
+
+echo "===== 4. PEMULIHAN KEDUA (berturut-turut) ====="
+iptables-restore < /root/$NAMA.rules
+bash /root/$NAMA.sh
+cek PULIH-2
+
+echo "===== HASIL AKHIR ====="
+iptables -S; iptables -t nat -S; ip route
+```
+
+### Cara Menjalankan
+
+```bash
+bash /root/no20.sh shigeru        # di Shigeru
+bash /root/no20.sh fuyutsuki      # di Fuyutsuki
+bash /root/no20.sh tokyo3-core    # di Tokyo3-Core
+```
+
+### Hasil Pengujian Soal 20
+
+1. **Shigeru**: AWAL 14 / 4 / 5 (filter / nat / route) → DIHAPUS 3 / 4 / 3 → PULIH-1 14 / 4 / 5 → **PULIH-2 14 / 4 / 5**:
+   <img width="1309" height="885" alt="image" src="https://github.com/user-attachments/assets/5ffb769a-d580-4bf4-9361-d7782090baaa" />
+
+2. **Fuyutsuki**: AWAL 3 / 5 / 7 → DIHAPUS 3 / 4 / 4 → PULIH-1 3 / 5 / 7 → **PULIH-2 3 / 5 / 7**. Rule DNAT kembali muncul di tabel nat:
+   <img width="1357" height="886" alt="image" src="https://github.com/user-attachments/assets/dc5d4786-8041-4111-ae6d-977d2ec082b9" />
+
+3. **Tokyo3-Core**: AWAL 11 / 4 / 2 → DIHAPUS 3 / 4 / 1 → PULIH-1 11 / 4 / 2 → **PULIH-2 11 / 4 / 2**:
+   <img width="1321" height="885" alt="image" src="https://github.com/user-attachments/assets/ba6f2376-4813-418d-a563-05147f01190f" />
+
+4. **Uji fungsi Shigeru**:
+   - Casper ping `192.224.4.82` berhasil (`0% packet loss`), sehingga pengecualian ping dari subnet Terminal (Soal 18) aktif lagi:
+     <img width="828" height="226" alt="image" src="https://github.com/user-attachments/assets/03c2353a-49c2-4fa6-a5ec-5ae359dc4b8f" />
+
+   - Lilith ping `192.224.4.82` gagal (`100% packet loss`), sehingga zona sensitif Soal 18 aktif lagi:
+     <img width="873" height="142" alt="image" src="https://github.com/user-attachments/assets/b9e61df0-01af-41bd-bb85-dfcb4dde6f3f" />
+
+   - Zeruel ping `8.8.8.8` berhasil (`0% packet loss`), sehingga rute default Shigeru pulih dan node dalam zona tetap bisa keluar:
+     <img width="858" height="231" alt="image" src="https://github.com/user-attachments/assets/e1685640-d2be-49e6-8b77-fe39fd09e299" />
+
+   - Armisael ping `8.8.8.8` gagal (`100% packet loss`), sehingga isolasi Soal 19 aktif lagi:
+     <img width="856" height="198" alt="image" src="https://github.com/user-attachments/assets/c18a5a50-2685-49f7-8f83-8f9986139ab7" />
+     
+
+5. **Uji fungsi Fuyutsuki**:
+   - Pen-Pen ping `8.8.8.8` berhasil (`0% packet loss`), sehingga rute Fuyutsuki ke Switch-Medic dan rute default pulih:
+     <img width="912" height="253" alt="image" src="https://github.com/user-attachments/assets/d2961669-45e5-472f-9593-a39fe9d40c6b" />
+
+   - Lilith ping Balthasar `192.224.4.59` berhasil (`0% packet loss`), sehingga rute Fuyutsuki ke Switch-Dogma pulih:
+     <img width="837" height="223" alt="image" src="https://github.com/user-attachments/assets/16fdaa60-a464-47ac-8f7c-0c11c8af8e60" />
+     
+   - Pesan Casper ke `192.224.4.82:9000` muncul di **Pen-Pen** (`soal 20 tes DNAT`), sehingga DNAT tabel nat (Soal 17) aktif lagi:
+     <img width="331" height="82" alt="image" src="https://github.com/user-attachments/assets/a18ec839-771f-433e-9ce9-a626e1bd951c" />
+
+     
+6. **Uji fungsi Tokyo3-Core**:
+   - Tokyo3-Core ping `8.8.8.8` berhasil (`0% packet loss`), sehingga rute default pulih:
+     <img width="829" height="223" alt="image" src="https://github.com/user-attachments/assets/73f9897b-a291-4a54-a4b8-b912edd42205" />
+
+   - Lilith ping rapat (`ping -i 0.1 -c 50 192.224.4.106`) menghasilkan **40% packet loss** (50 dikirim, 30 diterima), sehingga pembatasan ping Soal 15 aktif lagi:
+     <img width="928" height="214" alt="image" src="https://github.com/user-attachments/assets/53f372a7-1c9a-40d6-943e-90164c105bad" />
+      
+     <img width="967" height="187" alt="image" src="https://github.com/user-attachments/assets/cb1b3ac2-5bfd-41e6-be12-7e1886e96f20" />
+
+   - Dummy-Plug ke port 22 Tokyo3-Core ditolak seketika (`real 0m0.005s`, `exit=1`):
+     <img width="426" height="148" alt="image" src="https://github.com/user-attachments/assets/f5b74f0e-a309-4235-a995-f5cf20b4de71" />
+
+   - Rule Tokyo3-Core dipulihkan dari `/root/tokyo3-core.rules`, lalu counter `SCAN_NERV` naik menjadi LOG = **1** dan REJECT = **1** setelah percobaan Dummy-Plug, sehingga Soal 16 aktif lagi:
+     <img width="1568" height="333" alt="image" src="https://github.com/user-attachments/assets/527777ab-3945-464a-a77e-cc4ef6ede2b4" />
+
+
+### Kesimpulan
+
+- Jumlah baris `iptables -S`, `iptables -t nat -S`, dan `ip route` setelah pemulihan pertama dan kedua **sama persis** di ketiga node, sehingga rule dan rute tidak dobel.
+- Setelah pemulihan, semua fungsi Soal 15–19 kembali berjalan seperti semula.
+- Setelah seluruh node GNS3 di-restart (semua rule hilang), rule Tokyo3-Core dipulihkan hanya dengan `iptables-restore < /root/tokyo3-core.rules` dan `bash /root/tokyo3-core.sh`, lalu langsung berfungsi kembali. Ini membuktikan file `.rules` dan `.sh` cukup untuk membangun ulang node dengan cepat.
