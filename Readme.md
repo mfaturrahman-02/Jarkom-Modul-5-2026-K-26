@@ -2875,3 +2875,282 @@ bash /root/no15.sh
 - Ping rapat mengirim 10 paket per detik selama 5 detik (50 paket). Yang diizinkan adalah 5 paket cadangan awal + 5 paket/detik × 5 detik ≈ **30 paket**, sehingga **20 paket** dibuang.
 - Ping biasa (1 paket per detik) berada di bawah batas, sehingga tidak terganggu.
 - Ping yang dikirim Tokyo3-Core tidak terkena rule, karena balasan yang diterimanya berupa echo-reply (type 0), bukan echo-request.
+
+## Soal 16: Pencuri yang Mencoba Setiap Pintu (Tokyo3-Core)
+
+> **Soal:**
+> 16. Pencuri yang mencoba setiap pintu: dari Switch-Lab, Dummy-Plug mengetuk port sensitif Tokyo3-Core satu per satu seperti pencuri. Ritsuko ingin tahu setiap percobaannya, dan pintunya harus dibanting. Setiap koneksi TCP dari Dummy-Plug ke port 22, 23, dan 3306 di Tokyo3-Core harus dicatat di log dengan prefix huruf besar `SCAN-NERV:`, lalu ditolak seketika. Port 80 dan 8080 tetap bisa diakses, dan klien lain tidak boleh terganggu. Buktikan `nc -w` dari Dummy-Plug ke port 22, 23, dan 3306 langsung ditolak, dan ke port 80 dan 8080 berhasil. Tunjukkan counter rule pencatatan, karena log kernel sering tidak terlihat di container.
+
+### Penjelasan
+
+- Rule dipasang di **Tokyo3-Core** (`192.224.4.106`) pada chain `INPUT`. Jump ke chain khusus **`SCAN_NERV`** hanya untuk paket dengan sumber **Dummy-Plug (`192.224.4.51`)**, protokol TCP, dan port tujuan **22, 23, 3306** (`-m multiport`).
+- Di dalam chain `SCAN_NERV`:
+  1. **`LOG`** paket SYN (`--syn`), sehingga setiap percobaan koneksi baru tercatat satu kali dengan prefix `SCAN-NERV: `.
+  2. **`REJECT --reject-with tcp-reset`**: koneksi langsung "dibanting" dengan TCP RST, sehingga klien langsung gagal tanpa menunggu timeout.
+- `LOG` harus berada **sebelum** `REJECT`. Jika dibalik, paket sudah ditolak sebelum sempat dicatat.
+- Klien lain dan port 80/8080 tidak cocok dengan rule, sehingga tidak terpengaruh.
+- Log kernel sering tidak terlihat dari dalam container (`dmesg` tidak bisa diakses), sehingga **counter rule `LOG`** dipakai sebagai bukti pencatatan.
+
+### Script `/root/no16.sh` (di Tokyo3-Core)
+
+```bash
+#!/bin/bash
+# Soal 16 - catat & tolak scan Dummy-Plug ke port sensitif Tokyo3-Core
+DUMMY=192.224.4.51
+
+# chain khusus, dikosongkan setiap script dijalankan (tidak dobel)
+iptables -N SCAN_NERV 2>/dev/null || iptables -F SCAN_NERV
+iptables -D INPUT -s $DUMMY -p tcp -m multiport --dports 22,23,3306 -j SCAN_NERV 2>/dev/null
+iptables -I INPUT 1 -s $DUMMY -p tcp -m multiport --dports 22,23,3306 -j SCAN_NERV
+
+# 1. catat setiap koneksi baru (paket SYN) dengan prefix huruf besar
+iptables -A SCAN_NERV -p tcp --syn -j LOG --log-prefix "SCAN-NERV: " --log-level 4
+# 2. banting pintunya: tolak seketika dengan TCP reset
+iptables -A SCAN_NERV -p tcp -j REJECT --reject-with tcp-reset
+
+iptables -S
+```
+
+### Cara Menjalankan
+
+```bash
+chmod +x /root/no16.sh
+bash /root/no16.sh
+```
+
+### Hasil Pengujian Soal 16
+
+1. **Script dijalankan di Tokyo3-Core**, rule `LOG` dengan prefix `SCAN-NERV:` dan rule `REJECT` terpasang (rule Soal 15 tetap ada):
+   ![Script soal 16 di Tokyo3-Core](asset/soal16_script_tokyo3.png)
+2. **Dummy-Plug** ke port 22, 23, dan 3306 langsung ditolak (`real 0m0.003s`–`0m0.007s`, `exit=1`):
+   ![Scan Dummy-Plug ditolak](asset/soal16_dummy_ditolak.png)
+3. **Dummy-Plug** ke port 80 mendapat `Welcome to Tokyo3-Core`, dan ke port 8080 mendapat `syifa imutz` (`exit=0`):
+   ![Dummy-Plug port 80 dan 8080](asset/soal16_dummy_80_8080.png)
+4. **Counter `SCAN_NERV`** di Tokyo3-Core: LOG = **3 pkts** dan REJECT = **3 pkts** (180 bytes). Log kernel tidak terlihat di container, sehingga counter dipakai sebagai bukti:
+   ![Counter SCAN_NERV](asset/soal16_counter.png)
+5. **Lilith** (klien lain) tetap bisa ke port 80. Percobaan ke port 22 gagal karena memang tidak ada layanan:
+   ![Lilith nc ke Tokyo3-Core](asset/soal16_lilith_nc.png)
+6. **Counter `SCAN_NERV` tetap 3** setelah percobaan Lilith, membuktikan klien lain tidak terkena rule:
+   ![Counter tetap](asset/soal16_counter_tetap.png)
+
+## Soal 17: Sihir Hitam di Jalur Paket (Fuyutsuki)
+
+> **Soal:**
+> 17. Sihir hitam di jalur paket: Ritsuko meninggalkan memo di meja Gendo. Paket dari Casper ke Zeruel tidak pernah sampai ke Zeruel, karena ada router yang diam-diam mengalihkannya ke tempat lain. "Cari saja router yang menjadi gateway Switch-Terminal." Gendo menyuruhmu meniru router yang diam-diam itu untuk menjebak siapa pun. Di Fuyutsuki, alihkan setiap koneksi TCP dari Magi-Casper ke Zeruel supaya sampai di Pen-Pen. Casper tidak boleh sadar. Balasan yang ia terima harus tetap terlihat datang dari Zeruel. Ping tidak dialihkan. Nyalakan listener port 9000 di Pen-Pen dan Zeruel. Dari Casper, kirim pesan ke IP Zeruel port 9000. Buktikan pesan itu muncul di Pen-Pen, bukan di Zeruel. Tunjukkan juga tabel conntrack di Fuyutsuki.
+
+### Penjelasan
+
+- Router yang menjadi gateway Switch-Terminal adalah **Fuyutsuki**, sehingga semua paket Casper (`192.224.4.58`) menuju luar subnet pasti melewati Fuyutsuki.
+- Dipakai **DNAT pada chain `PREROUTING`** (tabel `nat`): alamat tujuan paket TCP dari Casper ke Zeruel (`192.224.4.82`) diganti menjadi Pen-Pen (`192.224.3.194`) **sebelum** keputusan routing, sehingga paket diteruskan ke arah Maya → Pen-Pen.
+- Pen-Pen juga berada di bawah Fuyutsuki (lewat Maya), sehingga balasan Pen-Pen pasti kembali lewat Fuyutsuki. **Conntrack** di Fuyutsuki otomatis mengembalikan alamat sumber balasan dari `192.224.3.194` menjadi `192.224.4.82`. Akibatnya Casper melihat balasan datang dari Zeruel dan tidak sadar dialihkan.
+- Rule hanya untuk `-p tcp`, sehingga **ping (ICMP) tidak dialihkan** dan tetap dijawab Zeruel.
+- `iptables -C ... ||` mencegah rule dobel saat script dijalankan ulang.
+
+### Persiapan
+
+1. **Di Fuyutsuki**, pasang `conntrack` untuk melihat tabel koneksi:
+```bash
+   echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
+   apt-get update; apt-get install -y conntrack
+```
+2. **Di Pen-Pen dan Zeruel**, pasang netcat untuk listener port 9000:
+```bash
+   apt-get update; apt-get install -y netcat-traditional
+```
+
+### Script `/root/no17.sh` (di Fuyutsuki)
+
+```bash
+#!/bin/bash
+# Soal 17 - alihkan diam-diam TCP Casper->Zeruel ke Pen-Pen (DNAT)
+CASPER=192.224.4.58
+ZERUEL=192.224.4.82
+PENPEN=192.224.3.194
+
+# hanya TCP (ping tidak dialihkan); -C mencegah rule dobel
+iptables -t nat -C PREROUTING -s $CASPER -d $ZERUEL -p tcp -j DNAT --to-destination $PENPEN 2>/dev/null || \
+iptables -t nat -A PREROUTING -s $CASPER -d $ZERUEL -p tcp -j DNAT --to-destination $PENPEN
+
+iptables -t nat -S PREROUTING
+```
+
+### Cara Uji
+
+1. Nyalakan listener di **Pen-Pen** (`nc.traditional -n -l -p 9000`) dan **Zeruel** (`nc -n -l -p 9000`).
+2. Dari **Casper**, buka koneksi ke IP Zeruel lalu ketik pesan (koneksi dibiarkan terbuka):
+```bash
+   nc -n -v 192.224.4.82 9000
+```
+3. Selagi koneksi masih terbuka, periksa tabel conntrack di **Fuyutsuki**:
+```bash
+   conntrack -L -p tcp --dport 9000
+   iptables -t nat -L PREROUTING -v -n
+```
+
+### Hasil Pengujian Soal 17
+
+1. **Sebelum rule dipasang**, pesan Casper ke `192.224.4.82:9000` masih diterima di **Zeruel**:
+   ![Zeruel menerima pesan sebelum rule](asset/soal17_zeruel_sebelum.png)
+2. **Script dijalankan di Fuyutsuki**, rule `DNAT --to-destination 192.224.3.194` terpasang:
+   ![Script soal 17 di Fuyutsuki](asset/soal17_script_fuyutsuki.png)
+3. **Casper** menampilkan `Connection to 192.224.4.82 9000 port [tcp/*] succeeded!`, sehingga Casper mengira tersambung ke Zeruel:
+   ![Casper tersambung ke 192.224.4.82](asset/soal17_casper_succeeded.png)
+4. **Pen-Pen** menerima pesan `Halo Zeruel, ini Casper soal 17`:
+   ![Pen-Pen menerima pesan](asset/soal17_penpen_menerima.png)
+5. **Zeruel** tidak menerima apa pun (layar listener tetap kosong):
+   ![Zeruel kosong](asset/soal17_zeruel_kosong.png)
+6. **Tabel conntrack di Fuyutsuki**: `ESTABLISHED src=192.224.4.58 dst=192.224.4.82 sport=40872 dport=9000 src=192.224.3.194 dst=192.224.4.58 sport=9000 dport=40872 [ASSURED]`, dengan counter DNAT 4 pkts:
+   ![Conntrack di Fuyutsuki](asset/soal17_conntrack.png)
+7. **Ping tidak dialihkan**: Casper `ping -c 3 192.224.4.82` berhasil (`0% packet loss`) dan dijawab Zeruel sendiri:
+   ![Casper ping Zeruel](asset/soal17_ping_casper_zeruel.png)
+
+### Membaca Tabel Conntrack
+
+- Bagian pertama (`src=192.224.4.58 dst=192.224.4.82`) adalah koneksi asli dari sudut pandang Casper, yaitu menuju Zeruel.
+- Bagian kedua (`src=192.224.3.194 dst=192.224.4.58`) adalah arah balasan, yang ternyata datang dari **Pen-Pen**.
+- Inilah bukti bahwa Fuyutsuki diam-diam mengalihkan tujuan koneksi, sementara Casper tetap melihat balasan dari Zeruel.
+
+## Soal 18: Gerbang Monolith dan Radar (Shigeru)
+
+> **Soal:**
+> 18. Gerbang Monolith dan Radar: Monolith dan Radar menyimpan rahasia terbesar NERV, dan Shigeru menjaganya tanpa kompromi. Pasang aturan di Shigeru. Node di dalam zona boleh memulai koneksi ke mana saja, dan balasannya tetap sampai. Node di luar zona tidak boleh memulai koneksi ke dalam zona. Satu pengecualian: ping dari subnet Terminal boleh masuk. Tolak berdasarkan arah datangnya, yaitu semua yang datang dari sisi Shigeru yang menghadap Gendo. Jangan menulis subnet luar satu per satu, supaya subnet baru langsung ikut terblokir. Buktikan ping Casper ke Zeruel berhasil, sedangkan ping Lilith ke Zeruel gagal.
+
+### Penjelasan
+
+- Zona sensitif terdiri dari **Switch-Monolith** (`192.224.4.80/29`: Zeruel, Armisael) dan **Switch-Radar** (`192.224.4.88/29`: Radar-Array, lewat Mokoto).
+- Semua lalu lintas dari luar zona pasti masuk ke Shigeru melalui **`eth0`** (link ke Gendou, `192.224.4.134`). Karena itu filter dipasang pada chain **`FORWARD`** dengan kondisi `-i eth0`, tanpa menulis subnet luar satu per satu. Subnet baru di luar zona otomatis ikut terblokir.
+- Rule di chain **`ZONA_SENSITIF`**:
+  1. `ESTABLISHED,RELATED` → `ACCEPT`: balasan untuk koneksi yang dimulai dari dalam zona tetap bisa masuk.
+  2. ICMP echo-request dari **subnet Terminal (`192.224.4.56/29`)** → `ACCEPT`: pengecualian ping dari Terminal.
+  3. Sisanya → `DROP`: koneksi baru dari luar zona ditolak.
+- Lalu lintas antar-node di dalam zona (Monolith ↔ Radar lewat `eth2`) dan dari zona ke luar tidak melewati `-i eth0`, sehingga tidak terpengaruh.
+
+### Script `/root/no18.sh` (di Shigeru)
+
+```bash
+#!/bin/bash
+# Soal 18 - gerbang zona sensitif Monolith & Radar di Shigeru
+UPLINK=eth0                    # sisi Shigeru yang menghadap Gendou (192.224.4.133)
+TERMINAL_NET=192.224.4.56/29   # subnet Terminal (Casper, Balthasar, Melchior)
+
+# chain khusus, dikosongkan setiap script dijalankan (tidak dobel)
+iptables -N ZONA_SENSITIF 2>/dev/null || iptables -F ZONA_SENSITIF
+iptables -D FORWARD -i $UPLINK -j ZONA_SENSITIF 2>/dev/null
+iptables -A FORWARD -i $UPLINK -j ZONA_SENSITIF
+
+# 1. balasan untuk koneksi yang dimulai dari dalam zona
+iptables -A ZONA_SENSITIF -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# 2. pengecualian: ping dari subnet Terminal
+iptables -A ZONA_SENSITIF -s $TERMINAL_NET -p icmp --icmp-type echo-request -j ACCEPT
+# 3. selain itu, semua yang datang dari sisi Gendou ditolak
+iptables -A ZONA_SENSITIF -j DROP
+
+iptables -S
+```
+
+### Cara Menjalankan
+
+```bash
+chmod +x /root/no18.sh
+bash /root/no18.sh
+```
+
+### Hasil Pengujian Soal 18
+
+1. **Script dijalankan di Shigeru**, chain `ZONA_SENSITIF` terpasang pada `FORWARD -i eth0`:
+   ![Script soal 18 di Shigeru](asset/soal18_script_shigeru.png)
+2. **Casper** (subnet Terminal) berhasil ping Zeruel (`0% packet loss`):
+   ![Casper ping Zeruel berhasil](asset/soal18_casper_berhasil.png)
+3. **Lilith** (luar zona) gagal ping Zeruel `192.224.4.82` dan Radar-Array `192.224.4.90` (`100% packet loss`):
+   ![Lilith ping zona sensitif gagal](asset/soal18_lilith_gagal.png)
+4. **Zeruel** (dalam zona) tetap bisa ping `8.8.8.8` dan Lilith `192.224.4.74` (`0% packet loss`), karena balasannya diizinkan oleh rule `ESTABLISHED`:
+   ![Zeruel ping keluar zona](asset/soal18_zeruel_keluar.png)
+5. **Counter `ZONA_SENSITIF`**: ESTABLISHED = 8 pkts, ICMP Terminal = 1 pkt, DROP = 6 pkts:
+   ![Counter ZONA_SENSITIF](asset/soal18_counter.png)
+
+### Analisis Counter
+
+- **ESTABLISHED,RELATED = 8 pkts**: 6 balasan untuk Zeruel (3 dari 8.8.8.8 + 3 dari Lilith) ditambah 2 ping lanjutan Casper.
+- **ICMP dari Terminal = 1 pkt**: hanya ping pertama Casper yang berstatus NEW. Ping ke-2 dan ke-3 sudah dianggap satu aliran ICMP yang ESTABLISHED, sehingga masuk ke rule pertama.
+- **DROP = 6 pkts**: 3 ping Lilith ke Zeruel dan 3 ping Lilith ke Radar-Array.
+
+## Soal 19: Hukuman untuk Sang Pengkhianat (Isolasi Armisael di Shigeru & Zeruel)
+
+> **Soal:**
+> 19. Hukuman untuk sang pengkhianat: hitung mundur tinggal beberapa menit. Armisael tidak boleh lagi bicara dengan siapa pun, tapi Zeruel di sebelahnya tidak boleh ikut terhukum. Blokir semua lalu lintas masuk dan keluar Armisael, termasuk ke gateway dan tetangga satu switch. Isolasi tidak boleh dikerjakan di dalam Armisael, karena pengkhianat tidak bisa dipercaya. Untuk uji nc, nyalakan listener TCP 9000 di Armisael, Zeruel, dan Lilith. Ke Seele pakai TCP 53. Buktikan ping dan nc dari Armisael ke Seele, Zeruel, dan Lilith gagal. Buktikan ping dan nc dari Zeruel ke Seele dan Lilith berhasil.
+
+### Penjelasan
+
+Armisael (`192.224.4.83`) berada di Switch-Monolith bersama Zeruel (`192.224.4.82`), dengan gateway Shigeru (`192.224.4.81`). Isolasi dipasang di dua tempat:
+
+1. **Ke gateway Shigeru**: paket langsung ke Shigeru, sehingga diblok di **Shigeru** chain `INPUT` dan `OUTPUT`.
+2. **Ke internet (Seele) dan LAN lain (Lilith)**: paket diteruskan Shigeru, sehingga diblok di **Shigeru** chain `FORWARD`.
+3. **Ke Zeruel (tetangga satu switch)**: paket lewat switch dan tidak melewati Shigeru, sehingga diblok di **Zeruel** chain `INPUT` dan `OUTPUT`.
+
+- Di **Shigeru**, chain **`ISOLASI_ARMISAEL`** dipanggil dari `INPUT`, `FORWARD`, dan `OUTPUT` pada **posisi paling atas** (`-I ... 1`), sehingga berlaku sebelum rule Soal 18 (termasuk `ACCEPT ESTABLISHED`). Isinya `DROP` untuk sumber dan tujuan `192.224.4.83`.
+- Di **Zeruel**, hanya ditambahkan `DROP` untuk paket **dari** Armisael (`INPUT`) dan **ke** Armisael (`OUTPUT`). Lalu lintas Zeruel ke tujuan lain tidak terpengaruh, sehingga Zeruel tidak ikut terhukum.
+- Switch GNS3 tidak bisa difilter, sehingga arah Armisael ↔ Zeruel hanya bisa ditutup dari sisi Zeruel.
+- **Tidak ada konfigurasi apa pun di Armisael.** Listener nc di Armisael hanya dipakai untuk pengujian.
+
+### Script `/root/no19.sh` (di Shigeru)
+
+```bash
+#!/bin/bash
+# Soal 19 - isolasi Armisael di Shigeru (gateway, internet, LAN lain)
+ARMISAEL=192.224.4.83
+
+# chain khusus, dikosongkan setiap script dijalankan (tidak dobel)
+iptables -N ISOLASI_ARMISAEL 2>/dev/null || iptables -F ISOLASI_ARMISAEL
+for ch in INPUT FORWARD OUTPUT; do
+  iptables -D $ch -j ISOLASI_ARMISAEL 2>/dev/null
+  iptables -I $ch 1 -j ISOLASI_ARMISAEL     # paling atas, sebelum rule soal 18
+done
+
+iptables -A ISOLASI_ARMISAEL -s $ARMISAEL -j DROP
+iptables -A ISOLASI_ARMISAEL -d $ARMISAEL -j DROP
+
+iptables -S
+```
+
+### Script `/root/no19.sh` (di Zeruel)
+
+```bash
+#!/bin/bash
+# Soal 19 - Zeruel menutup diri dari Armisael (tetangga satu switch)
+ARMISAEL=192.224.4.83
+
+iptables -C INPUT  -s $ARMISAEL -j DROP 2>/dev/null || iptables -I INPUT 1  -s $ARMISAEL -j DROP
+iptables -C OUTPUT -d $ARMISAEL -j DROP 2>/dev/null || iptables -I OUTPUT 1 -d $ARMISAEL -j DROP
+
+iptables -S
+```
+
+### Cara Uji
+
+1. Nyalakan listener TCP 9000 (`nc -n -l -p 9000`) di Armisael, Zeruel, dan Lilith.
+2. Uji ke Seele (`8.8.8.8`) memakai TCP 53:
+```bash
+   nc -n -z -v -w 3 8.8.8.8 53; echo "exit=$?"
+```
+3. Uji ke Zeruel dan Lilith memakai TCP 9000:
+```bash
+   echo "pesan" | nc -n -w 3 192.224.4.82 9000; echo "exit=$?"
+   echo "pesan" | nc -n -w 3 192.224.4.74 9000; echo "exit=$?"
+```
+
+### Hasil Pengujian Soal 19
+
+1. **Script dijalankan di Shigeru**, chain `ISOLASI_ARMISAEL` terpasang paling atas di `INPUT`, `FORWARD`, dan `OUTPUT` (rule Soal 18 tetap ada):
+   ![Script soal 19 di Shigeru](asset/soal19_script_shigeru.png)
+2. **Script dijalankan di Zeruel**, rule `DROP` untuk `192.224.4.83` terpasang di `INPUT` dan `OUTPUT`:
+   ![Script soal 19 di Zeruel](asset/soal19_script_zeruel.png)
+3. **Armisael** gagal ping ke Seele `8.8.8.8`, Zeruel `192.224.4.82`, Lilith `192.224.4.74`, dan gateway `192.224.4.81` (`100% packet loss`). Semua `nc` gagal (`exit=1`): TCP 53 ke Seele `timed out`, dan TCP 9000 ke Zeruel dan Lilith tidak menghasilkan pesan apa pun:
+   ![Armisael terisolasi](asset/soal19_armisael_gagal.png)
+4. **Zeruel** berhasil ping `8.8.8.8` dan Lilith (`0% packet loss`), dan `nc` ke Seele TCP 53 `succeeded!` (`exit=0`):
+   ![Zeruel ke Seele berhasil](asset/soal19_zeruel_seele.png)
+5. **Zeruel** berhasil mengirim pesan ke Lilith TCP 9000 (`exit=0`), dan pesan `Halo Lilith dari Zeruel soal 19` muncul di Lilith:
+   ![Zeruel ke Lilith berhasil](asset/soal19_zeruel_lilith.png)
+6. **Counter isolasi**: Shigeru `ISOLASI_ARMISAEL` DROP `-s 192.224.4.83` = **12 pkts**, dan Zeruel `INPUT` DROP `-s 192.224.4.83` = **5 pkts**:
+   ![Counter isolasi](asset/soal19_counter.png)
+7. **Arah masuk juga terblok**: Lilith gagal ping Armisael (`100% packet loss`):
+   ![Lilith ping Armisael gagal](asset/soal19_lilith_ke_armisael.png)
